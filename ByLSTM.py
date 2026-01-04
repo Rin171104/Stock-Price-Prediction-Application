@@ -1,66 +1,59 @@
-import argparse
-import pandas as pd
-import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim
+import pandas as pd
+import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from tqdm import tqdm
-from model_LSTM import LSTMModel
+from argparse import ArgumentParser
+from tqdm.autonotebook import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import shutil
 import os
+from model_LSTM import LSTMModel
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-
-# =============================
 # Argument Parser
-# =============================
 def get_args():
-    parser = argparse.ArgumentParser(description="LSTM Time-Series Training")
-    parser.add_argument("--data_path", type=str, default="Vingroup_4y.csv")
-    parser.add_argument("--seq_len", type=int, default=60)
-    parser.add_argument("--test_size", type=float, default=0.2)
-    parser.add_argument("--epochs", "-e", type=int, default=20)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser = ArgumentParser(description="LSTM Time-Series Training")
+    parser.add_argument("--data-path", "-d", type=str, default="Vingroup_4y.csv")
+    parser.add_argument("--epochs", "-e", type=int, default=100)
+    parser.add_argument("--batch-size", "-b", type=int, default=32)
+    parser.add_argument("--seq-len", "-s", type=int, default=60)
+    parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--hidden_size", type=int, default=50)
-    parser.add_argument("--num_layers", type=int, default=2)
-    parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--log_folder", "-p", type=str, default="tensorboard")
+    parser.add_argument("--logging", "-l", type=str, default="tensorboard")
+    parser.add_argument("--trained-models", "-t", type=str, default="trained-models")
+    parser.add_argument("--checkpoint", "-c", type=str, default=None)
     return parser.parse_args()
 
 
-# =============================
-# Create sequences
-# =============================
+# Create time-series sequences
 def create_sequences(dataset, seq_len):
     x, y = [], []
     for i in range(seq_len, len(dataset)):
-        x.append(dataset[i - seq_len:i, 0])
-        y.append(dataset[i, 0])
+        x.append(dataset[i - seq_len:i, :])
+        y.append(dataset[i, 3])
     return np.array(x), np.array(y)
 
 
-# =============================
-# Training function
-# =============================
-def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+if __name__ == "__main__":
+    args = get_args()
 
     # ---------- Load data ----------
     data = pd.read_csv(args.data_path)
-    values = data[["close"]].astype(float).values
 
-    # ---------- Split ----------
-    train_size = int(len(values) * (1 - args.test_size))
-    train_data = values[:train_size]
-    test_data = values[train_size:]
+    features = ["open", "high", "low", "close", "volume"]
+    values = data[features].astype(float).values
 
-    # ---------- Scale ----------
+    # ---------- Train / Test split ----------
+    split_idx = int(len(values) * (1 - args.test_size))
+    train_data = values[:split_idx]
+    test_data = values[split_idx:]
+
+    # ---------- Scale (fit only on train) ----------
     scaler = StandardScaler()
     train_scaled = scaler.fit_transform(train_data)
     test_scaled = scaler.transform(test_data)
@@ -69,108 +62,134 @@ def train(args):
     x_train, y_train = create_sequences(train_scaled, args.seq_len)
     x_test, y_test = create_sequences(test_scaled, args.seq_len)
 
-    x_train = torch.tensor(x_train.reshape(-1, args.seq_len, 1), dtype=torch.float32)
+    x_train = torch.tensor(x_train, dtype=torch.float32)
     y_train = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
 
-    x_test = torch.tensor(x_test.reshape(-1, args.seq_len, 1), dtype=torch.float32)
+    x_test = torch.tensor(x_test, dtype=torch.float32)
     y_test = torch.tensor(y_test, dtype=torch.float32).unsqueeze(1)
 
     train_loader = DataLoader(
         TensorDataset(x_train, y_train),
         batch_size=args.batch_size,
-        shuffle=True
+        shuffle=True,
+        drop_last=True
     )
 
-    # ---------- Model ----------
+    test_loader = DataLoader(
+        TensorDataset(x_test, y_test),
+        batch_size=args.batch_size,
+        shuffle=False
+    )
+
+    # ---------- TensorBoard ----------
+    if os.path.isdir(args.logging):
+        shutil.rmtree(args.logging)
+    if not os.path.isdir(args.trained_models):
+        os.mkdir(args.trained_models)
+
+    writer = SummaryWriter(args.logging)
+
+    # ---------- Device ----------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = LSTMModel(
-        input_size=1,
-        hidden_size=args.hidden_size,
-        num_layers=args.num_layers,
-        dropout=args.dropout
+        input_size=5,
+        hidden_size=50,
+        num_layers=2,
+        dropout=0.2
     ).to(device)
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    # ---------- TensorBoard ----------
-    if os.path.isdir(args.log_folder):
-        shutil.rmtree(args.log_folder)
-    writer = SummaryWriter(args.log_folder)
+    # ---------- Load checkpoint ----------
+    if args.checkpoint:
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        start_epoch = checkpoint["epoch"]
+        best_mse = checkpoint["best_mse"]
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+    else:
+        start_epoch = 0
+        best_mse = float("inf")
 
-    dummy_input = torch.zeros(1, args.seq_len, 1).to(device)
-    writer.add_graph(model, dummy_input)
-
-    print(model)
-
-    # ---------- Training ----------
-    global_step = 0
-
-    for epoch in range(args.epochs):
+    # ---------------------------------------------------------
+    # Training loop
+    # ---------------------------------------------------------
+    for epoch in range(start_epoch, args.epochs):
         model.train()
+        progress_bar = tqdm(train_loader, colour="cyan")
         epoch_loss = 0.0
-
-        progress_bar = tqdm(
-            train_loader,
-            desc=f"Epoch {epoch+1}/{args.epochs}",
-            colour="cyan"
-        )
 
         for xb, yb in progress_bar:
             xb, yb = xb.to(device), yb.to(device)
 
-            optimizer.zero_grad()
             preds = model(xb)
             loss = criterion(preds, yb)
+
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             epoch_loss += loss.item()
-
-            # TensorBoard - step loss
-            writer.add_scalar("Train/Loss_step", loss.item(), global_step)
-            global_step += 1
-
-            progress_bar.set_postfix(
-                loss=epoch_loss / (progress_bar.n + 1)
+            progress_bar.set_description(
+                f"Epoch {epoch+1}/{args.epochs} | Loss {loss.item():.4f}"
             )
 
-        # TensorBoard - epoch loss & lr
-        writer.add_scalar("Train/Loss_epoch", epoch_loss / len(train_loader), epoch)
-        writer.add_scalar("Train/Learning_rate", optimizer.param_groups[0]["lr"], epoch)
+        writer.add_scalar("Train/Loss", epoch_loss / len(train_loader), epoch)
 
         # ---------- Evaluation ----------
         model.eval()
+        preds_all, labels_all = [], []
+
         with torch.no_grad():
-            y_pred_scaled = model(x_test.to(device)).cpu().numpy()
+            for xb, yb in test_loader:
+                xb = xb.to(device)
+                preds = model(xb).cpu().numpy()
+                preds_all.append(preds)
+                labels_all.append(yb.numpy())
 
-        y_pred = scaler.inverse_transform(y_pred_scaled)
-        y_true = scaler.inverse_transform(y_test.numpy())
+        preds_all = np.vstack(preds_all)
+        labels_all = np.vstack(labels_all)
 
-        mae = mean_absolute_error(y_true, y_pred)
-        mse = mean_squared_error(y_true, y_pred)
-        r2 = r2_score(y_true, y_pred)
+        # inverse scale cho CLOSE (index = 3)
+        close_mean = scaler.mean_[3]
+        close_std = scaler.scale_[3]
 
-        # TensorBoard - metrics
-        writer.add_scalar("Eval/MAE", mae, epoch)
-        writer.add_scalar("Eval/MSE", mse, epoch)
-        writer.add_scalar("Eval/R2", r2, epoch)
+        preds_real = preds_all * close_std + close_mean
+        labels_real = labels_all * close_std + close_mean
 
-        print(
-            f"\nEpoch {epoch+1} | "
-            f"MAE: {mae:.4f} | MSE: {mse:.4f} | R2: {r2:.4f}"
+        mae = mean_absolute_error(labels_real, preds_real)
+        mse = mean_squared_error(labels_real, preds_real)
+        r2 = r2_score(labels_real, preds_real)
+
+        print(f"Epoch {epoch+1}: MAE={mae:.4f}, MSE={mse:.4f}, R2={r2:.4f}")
+
+        writer.add_scalar("Val/MAE", mae, epoch)
+        writer.add_scalar("Val/MSE", mse, epoch)
+        writer.add_scalar("Val/R2", r2, epoch)
+
+        # ---------- Save last ----------
+        torch.save(
+            {
+                "epoch": epoch + 1,
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "best_mse": best_mse
+            },
+            f"{args.trained_models}/last_lstm.pt"
         )
 
+        # ---------- Save best ----------
+        if mse < best_mse:
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "best_mse": mse
+                },
+                f"{args.trained_models}/best_lstm.pt"
+            )
+            best_mse = mse
+
     writer.close()
-
-    # ---------- Sample output ----------
-    print("\nSample predictions:")
-    for i in range(min(10, len(y_pred))):
-        print(f"Predicted: {y_pred[i][0]:.4f} | Actual: {y_true[i][0]:.4f}")
-
-
-# =============================
-# Main
-# =============================
-if __name__ == "__main__":
-    args = get_args()
-    train(args)
