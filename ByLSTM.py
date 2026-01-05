@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 import torch.optim
 import pandas as pd
@@ -45,7 +44,7 @@ if __name__ == "__main__":
     # ---------- Load data ----------
     data = pd.read_csv(args.data_path)
 
-    features = ["open", "high", "low", "close", "volume"]
+    features = ["open", "high", "low", "close"]
     values = data[features].astype(float).values
 
     # ---------- Train / Test split ----------
@@ -91,12 +90,9 @@ if __name__ == "__main__":
 
     # ---------- Device ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LSTMModel(
-        input_size=5,
-        hidden_size=50,
-        num_layers=2,
-        dropout=0.2
-    ).to(device)
+
+    #----------- Model -----------
+    model = LSTMModel(input_size=4,hidden_size=50,num_layers=2,dropout=0.2).to(device)
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
