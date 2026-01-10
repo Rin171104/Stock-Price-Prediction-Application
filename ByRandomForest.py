@@ -10,7 +10,7 @@ from lazypredict.Supervised import LazyRegressor
 
 
 
-data = pd.read_csv(r"D:\HocPython\NCKH\Vingroup_4y.csv")
+data = pd.read_csv(r"D:\HocPython\NCKH\Vingroup_format.csv")
 # profile = ProfileReport(data,title="Vin Report",explorative=True)
 # profile.to_file("Vin_report.html")
 # data.plot(kind='density', subplots=True, layout=(3,3), sharex=False)

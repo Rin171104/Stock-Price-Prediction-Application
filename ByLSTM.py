@@ -2,6 +2,8 @@ import torch.nn as nn
 import torch.optim
 import pandas as pd
 import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -17,7 +19,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 # Argument Parser
 def get_args():
     parser = ArgumentParser(description="LSTM Time-Series Training")
-    parser.add_argument("--data-path", "-d", type=str, default="Vingroup_4y.csv")
+    parser.add_argument("--data-path", "-d", type=str, default="Vingroup_format.csv")
     parser.add_argument("--epochs", "-e", type=int, default=100)
     parser.add_argument("--batch-size", "-b", type=int, default=32)
     parser.add_argument("--seq-len", "-s", type=int, default=60)
@@ -52,10 +54,14 @@ if __name__ == "__main__":
     train_data = values[:split_idx]
     test_data = values[split_idx:]
 
-    # ---------- Scale (fit only on train) ----------
-    scaler = StandardScaler()
-    train_scaled = scaler.fit_transform(train_data)
-    test_scaled = scaler.transform(test_data)
+    # ---------- Scale + Impute (fit only on train) ----------
+    num_transformer = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler())
+    ])
+
+    train_scaled = num_transformer.fit_transform(train_data)
+    test_scaled = num_transformer.transform(test_data)
 
     # ---------- Create sequences ----------
     x_train, y_train = create_sequences(train_scaled, args.seq_len)
@@ -148,8 +154,8 @@ if __name__ == "__main__":
         labels_all = np.vstack(labels_all)
 
         # inverse scale cho CLOSE (index = 3)
-        close_mean = scaler.mean_[3]
-        close_std = scaler.scale_[3]
+        close_mean = num_transformer.named_steps["scaler"].mean_[3]
+        close_std = num_transformer.named_steps["scaler"].scale_[3]
 
         preds_real = preds_all * close_std + close_mean
         labels_real = labels_all * close_std + close_mean

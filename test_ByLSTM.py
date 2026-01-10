@@ -8,7 +8,7 @@ from model_LSTM import LSTMModel
 # ARGUMENT PARSER
 def get_args():
     parser = ArgumentParser(description="Test LSTM with custom start_index")
-    parser.add_argument("--csv-path", type=str, default="Vingroup_4y.csv")
+    parser.add_argument("--csv-path", type=str, default="Vingroup_format.csv")
     parser.add_argument("--model-path", type=str, default="trained-models/best_lstm.pt")
     parser.add_argument("--seq-len", type=int, default=60)
     parser.add_argument("--start-index","-s", type=int, default=200,
