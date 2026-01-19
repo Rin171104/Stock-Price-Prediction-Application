@@ -4,6 +4,7 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from argparse import ArgumentParser
 from model_LSTM import LSTMModel
+import joblib
 
 # ARGUMENT PARSER
 def get_args():
@@ -30,7 +31,15 @@ if __name__ == "__main__":
         if col not in df.columns:
             raise ValueError(f" Missing column: {col}")
 
+    # clean data
+    for col in FEATURES:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=FEATURES).reset_index(drop=True)
+
     values = df[FEATURES].astype(float).values  # (N, 4)
+
+    num_transformer = joblib.load("preprocess.pkl")
+    values_scaled = num_transformer.transform(values)
 
     # ---------- Check index ----------
     start = args.start_index
@@ -41,10 +50,6 @@ if __name__ == "__main__":
             f" start_index không hợp lệ! Dataset có {len(values)} dòng."
         )
 
-    # ---------- Scale ----------
-    scaler = StandardScaler()
-    scaler.fit(values)
-    values_scaled = scaler.transform(values)
 
     # ---------- Create input ----------
     x_seq = values_scaled[start:end]          # (60, 4)
@@ -71,8 +76,8 @@ if __name__ == "__main__":
         pred_scaled = model(x_seq).cpu().numpy()
 
     # ---------- Inverse scale (close index = 3) ----------
-    close_mean = scaler.mean_[3]
-    close_std = scaler.scale_[3]
+    close_mean = num_transformer.named_steps["scaler"].mean_[3]
+    close_std = num_transformer.named_steps["scaler"].scale_[3]
     pred_close = pred_scaled[0][0] * close_std + close_mean
 
     # ---------- Info ----------

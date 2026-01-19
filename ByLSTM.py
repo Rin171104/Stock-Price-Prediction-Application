@@ -13,8 +13,10 @@ from torch.utils.tensorboard import SummaryWriter
 import shutil
 import os
 from model_LSTM import LSTMModel
+import joblib
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 
 # Argument Parser
 def get_args():
@@ -47,6 +49,12 @@ if __name__ == "__main__":
     data = pd.read_csv(args.data_path)
 
     features = ["open", "high", "low", "close"]
+
+    # ---------- Clean data: remove non-numeric rows ----------
+    for col in features:
+        data[col] = pd.to_numeric(data[col], errors="coerce")
+    data = data.dropna(subset=features).reset_index(drop=True)
+
     values = data[features].astype(float).values
 
     # ---------- Train / Test split ----------
@@ -54,7 +62,7 @@ if __name__ == "__main__":
     train_data = values[:split_idx]
     test_data = values[split_idx:]
 
-    # ---------- Scale + Impute (fit only on train) ----------
+    # ---------- Scale + Impute  ----------
     num_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler())
@@ -62,6 +70,8 @@ if __name__ == "__main__":
 
     train_scaled = num_transformer.fit_transform(train_data)
     test_scaled = num_transformer.transform(test_data)
+
+    joblib.dump(num_transformer, "preprocess.pkl")
 
     # ---------- Create sequences ----------
     x_train, y_train = create_sequences(train_scaled, args.seq_len)
@@ -97,8 +107,8 @@ if __name__ == "__main__":
     # ---------- Device ----------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    #----------- Model -----------
-    model = LSTMModel(input_size=4,hidden_size=50,num_layers=2,dropout=0.2).to(device)
+    # ----------- Model -----------
+    model = LSTMModel(input_size=4, hidden_size=50, num_layers=2, dropout=0.2).to(device)
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -134,7 +144,7 @@ if __name__ == "__main__":
 
             epoch_loss += loss.item()
             progress_bar.set_description(
-                f"Epoch {epoch+1}/{args.epochs} | Loss {loss.item():.4f}"
+                f"Epoch {epoch + 1}/{args.epochs} | Loss {loss.item():.4f}"
             )
 
         writer.add_scalar("Train/Loss", epoch_loss / len(train_loader), epoch)
@@ -164,7 +174,7 @@ if __name__ == "__main__":
         mse = mean_squared_error(labels_real, preds_real)
         r2 = r2_score(labels_real, preds_real)
 
-        print(f"Epoch {epoch+1}: MAE={mae:.4f}, MSE={mse:.4f}, R2={r2:.4f}")
+        print(f"Epoch {epoch + 1}: MAE={mae:.4f}, MSE={mse:.4f}, R2={r2:.4f}")
 
         writer.add_scalar("Val/MAE", mae, epoch)
         writer.add_scalar("Val/MSE", mse, epoch)
